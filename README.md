@@ -338,8 +338,8 @@ MIT License - see [LICENSE](LICENSE) file for details
 
 ## 📞 Support
 
-- 📧 **Email:** support@yourcompany.com
-- 🐛 **Issues:** [GitHub Issues](https://github.com/yourusername/jenkins-generator/issues)
+- 📧 **Email:** sulabhadhikari90@gmail.com
+- 🐛 **Issues:** [GitHub Issues](https://github.com/sulabh1/cicd-automator/issues)
 - 📚 **Docs:** Full documentation in generated `.cicd/` folder
 
 ## ⭐ Show Your Support
