@@ -1,6 +1,6 @@
 {
   "name": "jenkins-generator",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Automated Jenkins CI/CD pipeline generator for multi-cloud deployments (AWS, Azure, GCP, DigitalOcean)",
   "main": "dist/index.js",
   "bin": {
