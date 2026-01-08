@@ -753,6 +753,7 @@ export class PromptService {
         name: 'provider',
         message: 'Select cloud provider:',
         choices: ['aws', 'azure', 'gcp', 'digitalocean'],
+        validate: (input) => (input ? true : 'Please select a cloud provider'),
       },
     ]);
 
@@ -772,7 +773,16 @@ export class PromptService {
       case 'digitalocean':
         credentials = await this.collectDOCredentials();
         break;
+      default:
+        throw new Error(`Unsupported cloud provider: ${provider}`);
     }
+
+    if (!credentials) {
+      throw new Error(
+        `Failed to collect credentials for provider: ${provider}`,
+      );
+    }
+
     const deploymentConfig = await this.collectDeploymentConfig(provider);
     return {
       provider,
