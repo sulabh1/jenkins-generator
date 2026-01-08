@@ -13,12 +13,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/sulabh1/cicd-automator.git"
+    "url": "https://github.com/sulabh1/jenkins-generator.git"
   },
   "bugs": {
-    "url": "https://github.com/sulabh1/cicd-automator/issues"
+    "url": "https://github.com/sulabh1/jenkins-generator/issues"
   },
-  "homepage": "https://github.com/sulabh1/cicd-automator#readme",
+  "homepage": "https://github.com/sulabh1/jenkins-generator#readme",
   "scripts": {
     "build": "tsc",
     "start": "node dist/cli.js",
