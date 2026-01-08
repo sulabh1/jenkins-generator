@@ -784,11 +784,28 @@ export class PromptService {
     };
   }
   private async collectAWSCredentials() {
-    return await inquirer.prompt([
+    const oidcConfig = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'useOIDC',
+        message: 'Use OIDC Authentication (Recommended for Security)?',
+        default: false,
+      },
+      {
+        type: 'input',
+        name: 'oidcRoleArn',
+        message: 'Enter AWS OIDC Role ARN:',
+        when: (answers) => answers.useOIDC,
+        validate: (input) => input.length > 0 || 'Role ARN is required',
+      },
+    ]);
+
+    const staticCredentials = await inquirer.prompt([
       {
         type: 'input',
         name: 'accessKeyId',
         message: 'Enter AWS Access Key ID:',
+        when: () => !oidcConfig.useOIDC,
         validate: (input) => input.length > 0 || 'Access Key ID is required',
       },
       {
@@ -796,6 +813,7 @@ export class PromptService {
         name: 'secretAccessKey',
         message: 'Enter AWS Secret Access Key:',
         mask: '*',
+        when: () => !oidcConfig.useOIDC,
         validate: (input) =>
           input.length > 0 || 'Secret Access Key is required',
       },
@@ -810,32 +828,50 @@ export class PromptService {
           'ap-south-1',
           'ap-southeast-1',
         ],
+        default: 'us-east-1',
       },
     ]);
+
+    return { ...oidcConfig, ...staticCredentials };
   }
 
   private async collectAzureCredentials() {
-    return await inquirer.prompt([
+    const oidcConfig = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'useOIDC',
+        message:
+          'Use OIDC Authentication (Service Principal with Federated Credentials)?',
+        default: false,
+      },
+    ]);
+
+    const azureConfig = await inquirer.prompt([
       {
         type: 'input',
         name: 'subscriptionId',
         message: 'Enter Azure Subscription ID:',
+        validate: (input) => input.length > 0 || 'Subscription ID is required',
+      },
+      {
+        type: 'input',
+        name: 'tenantId',
+        message: 'Enter Azure Tenant ID:',
+        validate: (input) => input.length > 0 || 'Tenant ID is required',
       },
       {
         type: 'input',
         name: 'clientId',
         message: 'Enter Azure Client ID:',
+        validate: (input) => input.length > 0 || 'Client ID is required',
       },
       {
         type: 'password',
         name: 'clientSecret',
         message: 'Enter Azure Client Secret:',
         mask: '*',
-      },
-      {
-        type: 'input',
-        name: 'tenantId',
-        message: 'Enter Azure Tenant ID:',
+        when: () => !oidcConfig.useOIDC,
+        validate: (input) => input.length > 0 || 'Client Secret is required',
       },
       {
         type: 'list',
@@ -844,36 +880,52 @@ export class PromptService {
         choices: [
           'eastus',
           'westus',
-          'centralus',
+          'northeurope',
           'westeurope',
           'southeastasia',
         ],
+        default: 'eastus',
       },
     ]);
+
+    return { ...oidcConfig, ...azureConfig };
   }
 
   private async collectGCPCredentials() {
-    return await inquirer.prompt([
-      { type: 'input', name: 'projectId', message: 'Enter GCP Project ID:' },
+    const oidcConfig = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'useOIDC',
+        message: 'Use OIDC Authentication (Workload Identity Federation)?',
+        default: false,
+      },
+    ]);
+
+    const gcpConfig = await inquirer.prompt([
+      {
+        type: 'input',
+        name: 'projectId',
+        message: 'Enter GCP Project ID:',
+        validate: (input) => input.length > 0 || 'Project ID is required',
+      },
       {
         type: 'input',
         name: 'keyFile',
-        message: 'Enter path to GCP service account key file:',
+        message: 'Enter path to GCP Service Account Key File:',
+        default: './gcp-key.json',
+        when: () => !oidcConfig.useOIDC,
         validate: (input) => input.length > 0 || 'Key file path is required',
       },
       {
         type: 'list',
         name: 'region',
         message: 'Select GCP region:',
-        choices: [
-          'us-central1',
-          'us-east1',
-          'europe-west1',
-          'asia-south1',
-          'asia-southeast1',
-        ],
+        choices: ['us-central1', 'us-east1', 'europe-west1', 'asia-east1'],
+        default: 'us-central1',
       },
     ]);
+
+    return { ...oidcConfig, ...gcpConfig };
   }
 
   private async collectDOCredentials() {
@@ -921,6 +973,17 @@ export class PromptService {
         message: 'Enable auto-scaling?',
         default: false,
       },
+      {
+        type: 'list',
+        name: 'deploymentStrategy',
+        message: 'Select deployment strategy',
+        choices: [
+          { name: 'Rolling Update (default)', value: 'rolling' },
+          { name: 'Blue-Green (Zero Downtime)', value: 'blue-green' },
+          { name: 'Canary (Gradual Traffic)', value: 'canary' },
+        ],
+        default: 'rolling',
+      },
     ]);
 
     let minInstances = 1;
@@ -965,6 +1028,22 @@ export class PromptService {
           (input !== undefined && this.validationService.validatePort(input)) ||
           'Invalid port number',
       },
+      {
+        type: 'confirm',
+        name: 'useLoadBalancer',
+        message:
+          'Will you use a Load Balancer / Stable DNS for this deployment?',
+        default: false,
+      },
+      {
+        type: 'input',
+        name: 'loadBalancerUrl',
+        message:
+          'Enter your Load Balancer DNS or Domain (e.g., https://api.myapp.com):',
+        when: (answers) => answers.useLoadBalancer,
+        validate: (input) =>
+          input.length > 0 || 'Load Balancer URL is required',
+      },
     ]);
 
     return {
@@ -976,6 +1055,9 @@ export class PromptService {
         maxInstances,
         healthCheckPath: healthConfig.healthCheckPath,
         port: healthConfig.port,
+        useLoadBalancer: healthConfig.useLoadBalancer,
+        loadBalancerUrl: healthConfig.loadBalancerUrl,
+        deploymentStrategy: answers.deploymentStrategy,
         environmentVariables: {}, // Will be populated later
       },
     };

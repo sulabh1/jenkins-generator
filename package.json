@@ -1,6 +1,6 @@
 {
   "name": "jenkins-generator",
-  "version": "2.0.1",
+  "version": "2.2.0",
   "description": "Automated Jenkins CI/CD pipeline generator for multi-cloud deployments (AWS, Azure, GCP, DigitalOcean)",
   "main": "dist/index.js",
   "bin": {
@@ -22,6 +22,8 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/cli.js",
+    "test": "jest",
+    "test:watch": "jest --watch",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -54,10 +56,15 @@
     "rxjs": "^7.8.1"
   },
   "devDependencies": {
+    "@nestjs/testing": "^11.1.11",
     "@types/crypto-js": "^4.2.2",
     "@types/fs-extra": "^11.0.4",
     "@types/inquirer": "^9.0.9",
+    "@types/jest": "^30.0.0",
     "@types/node": "^22.10.7",
+    "jest": "^30.2.0",
+    "jest-environment-node": "^30.2.0",
+    "ts-jest": "^29.4.6",
     "typescript": "^5.7.3"
   },
   "engines": {

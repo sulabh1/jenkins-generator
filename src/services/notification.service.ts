@@ -31,18 +31,16 @@ export class NotificationService {
 
   private generateEmailNotification(email: string): string {
     return `
-    # Email Notification Configuration
-    def sendEmailNotification(status, stageName=''){
+    def sendEmailNotification(status, stageName='') {
         def subject = "[\${status}] Jenkins Pipeline - \${env.JOB_NAME} #\${env.BUILD_NUMBER}"
-        def body = ""
+        def body = """
         <html>
         <body>
             <h2>Jenkins Pipeline Notification</h2>
             <p><strong>Job:</strong> \${env.JOB_NAME}</p>
-            <p><strong>Build Number:</strong>\${env.BUILD_NUMBER}</p>
-            <p><strong>Status:</strong> <span style="color: \${status == 'SUCCESS' ? 'green': 'red'};">\${status}</span></p>
+            <p><strong>Build Number:</strong> \${env.BUILD_NUMBER}</p>
+            <p><strong>Status:</strong> <span style="color: \${status == 'SUCCESS' ? 'green' : 'red'};">\${status}</span></p>
             \${stageName ? "<p><strong>Stage:</strong> \${stageName}</p>" : ""}
-            <p><strong>Duration:</strong> \${currentBuild.durationString}</p>
             <p><strong>Duration:</strong> \${currentBuild.durationString}</p>
             <p><strong>Build URL:</strong> <a href="\${env.BUILD_URL}">\${env.BUILD_URL}</a></p>
             <p><strong>Console Output:</strong> <a href="\${env.BUILD_URL}console">\${env.BUILD_URL}console</a></p>
@@ -50,16 +48,16 @@ export class NotificationService {
             <p><strong>Changes:</strong></p>
             <pre>\${currentBuild.changeSets.collect { it.items.collect { "\${it.author} - \${it.msg}" }.join('\\n') }.join('\\n')}</pre>
         </body>
-        </html
-    """
+        </html>
+        """
 
-    emailect(
-    subject: subject,
-    body: body,
-    to: '${email}'
-    mimeType: 'text/html'
-    attachLog: status != 'SUCCESS'
-    )
+        emailext(
+            subject: subject,
+            body: body,
+            to: '${email}',
+            mimeType: 'text/html',
+            attachLog: status != 'SUCCESS'
+        )
     }
     `;
   }

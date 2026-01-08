@@ -1,0 +1,13 @@
+version: "3.8"
+
+services:
+  cicd-automator:
+    build: .
+    volumes:
+      - .:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+    stdin_open: true
+    tty: true
+    command: npm run dev

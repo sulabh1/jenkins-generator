@@ -128,25 +128,13 @@ ${
     stage('Push Docker Image') {
       steps {
         script {
-          echo "Pushing Docker image to registry..."
+          ${this.generateDockerPushScript(
+            cloud,
+            dockerImageName,
+            dockerImageTag,
+          )}
           
-          withCredentials([
-            usernamePassword(
-              credentialsId: 'docker-registry-credentials',
-              usernameVariable: 'DOCKER_USERNAME',
-              passwordVariable: 'DOCKER_PASSWORD'
-            )
-          ]) {
-            sh '''
-              echo "\${DOCKER_PASSWORD}" | docker login -u "\${DOCKER_USERNAME}" --password-stdin
-              docker tag \${DOCKER_IMAGE} \${DOCKER_USERNAME}/\${DOCKER_IMAGE}
-              docker push \${DOCKER_USERNAME}/\${DOCKER_IMAGE}
-              docker logout
-            '''
-          }
-          
-          // Update DOCKER_IMAGE to include registry
-          env.DOCKER_IMAGE = "\${DOCKER_USERNAME}/${dockerImageName}:${dockerImageTag}"
+          // DOCKER_IMAGE is updated within generateDockerPushScript
           echo "Docker image pushed successfully"
         }
       }
@@ -174,16 +162,26 @@ ${
           echo "Performing health check..."
           sleep(time: 30, unit: 'SECONDS')
           
+          if (fileExists('deployment.env')) {
+            def props = readProperties file: 'deployment.env'
+            env.DEPLOYED_URL = props['DEPLOYED_URL']
+          }
+          
           def healthCheckPassed = false
           def maxRetries = 5
           def retryCount = 0
           
           while (!healthCheckPassed && retryCount < maxRetries) {
             try {
-              // This is a placeholder - you'll need to customize based on your deployment
-              sh 'echo "Health check endpoint: ${
-                cloud.deploymentConfig.healthCheckPath
-              }"'
+              // Functional health check using curl
+              sh """
+                echo "Checking health at: \${DEPLOYED_URL}${
+                  cloud.deploymentConfig.healthCheckPath
+                }"
+                curl -f \${DEPLOYED_URL}${
+                  cloud.deploymentConfig.healthCheckPath
+                } || exit 1
+              """
               healthCheckPassed = true
               echo "Health check passed"
             } catch (Exception e) {
@@ -272,60 +270,87 @@ Please configure the following credentials in Jenkins:
 `;
 
     switch (cloud.provider) {
-      case 'aws':
-        guide += `
+      case 'aws': {
+        const awsCreds = cloud.credentials as any;
+        if (awsCreds.useOIDC) {
+          guide += `
+3. AWS CREDENTIALS (OIDC)
+   - ID: aws-oidc-token
+     Type: OpenID Connect Token
+     Description: AWS OIDC Token from Federated Identity
+   
+   - [Setup Required]: Configure AWS Workload Identity Federation with Role ARN: ${awsCreds.oidcRoleArn}
+`;
+        } else {
+          guide += `
 3. AWS CREDENTIALS
    - ID: aws-access-key-id
      Type: Secret text
-     Secret: ${this.securityService.maskSensitiveData(
-       cloud.credentials['accessKeyId'],
-     )}
+     Secret: ${this.securityService.maskSensitiveData(awsCreds.accessKeyId)}
    
    - ID: aws-secret-access-key
      Type: Secret text
      Secret: [Your AWS Secret Access Key]
 `;
+        }
         break;
+      }
 
-      case 'azure':
+      case 'azure': {
+        const azCreds = cloud.credentials as any;
         guide += `
 3. AZURE CREDENTIALS
    - ID: azure-subscription-id
      Type: Secret text
-     Secret: ${this.securityService.maskSensitiveData(
-       cloud.credentials['subscriptionId'],
-     )}
+     Secret: ${this.securityService.maskSensitiveData(azCreds.subscriptionId)}
    
    - ID: azure-client-id
      Type: Secret text
-     Secret: ${this.securityService.maskSensitiveData(
-       cloud.credentials['clientId'],
-     )}
-   
-   - ID: azure-client-secret
-     Type: Secret text
-     Secret: [Your Azure Client Secret]
+     Secret: ${this.securityService.maskSensitiveData(azCreds.clientId)}
    
    - ID: azure-tenant-id
      Type: Secret text
-     Secret: ${this.securityService.maskSensitiveData(
-       cloud.credentials['tenantId'],
-     )}
+     Secret: ${this.securityService.maskSensitiveData(azCreds.tenantId)}
 `;
+        if (azCreds.useOIDC) {
+          guide += `
+   - ID: azure-federated-token
+     Type: OpenID Connect Token
+     Description: Azure Federated Token for Service Principal
+`;
+        } else {
+          guide += `
+   - ID: azure-client-secret
+     Type: Secret text
+     Secret: [Your Azure Client Secret]
+`;
+        }
         break;
+      }
 
-      case 'gcp':
+      case 'gcp': {
+        const gcpCreds = cloud.credentials as any;
         guide += `
 3. GCP CREDENTIALS
    - ID: gcp-project-id
      Type: Secret text
-     Secret: ${cloud.credentials['projectId']}
-   
+     Secret: ${gcpCreds.projectId}
+`;
+        if (gcpCreds.useOIDC) {
+          guide += `
+   - ID: gcp-oidc-token
+     Type: OpenID Connect Token
+     Description: GCP OIDC Token (Workload Identity Federation)
+`;
+        } else {
+          guide += `
    - ID: gcp-key-file
      Type: Secret file
      File: Upload your GCP service account key JSON file
 `;
+        }
         break;
+      }
 
       case 'digitalocean':
         guide += `
@@ -457,5 +482,80 @@ Generated on: ${new Date().toISOString()}
 `;
 
     return readme;
+  }
+
+  private generateDockerPushScript(
+    cloud: any,
+    dockerImageName: string,
+    dockerImageTag: string,
+  ): string {
+    const registryMap = {
+      aws: '${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com',
+      azure: '${ACR_LOGIN_SERVER}',
+      gcp: 'gcr.io/${GCP_PROJECT_ID}',
+      digitalocean: 'registry.digitalocean.com/${DO_REGISTRY_NAME}',
+    };
+
+    const registry = registryMap[cloud.provider] || '${DOCKER_USERNAME}';
+
+    switch (cloud.provider) {
+      case 'aws':
+        return `
+          echo "Pushing Docker image to AWS ECR..."
+          sh "aws ecr get-login-password --region \${AWS_REGION} | docker login --username AWS --password-stdin ${registry}"
+          sh "docker tag \${DOCKER_IMAGE} ${registry}/${dockerImageName}:\${dockerImageTag}"
+          sh "docker push ${registry}/${dockerImageName}:\${dockerImageTag}"
+          env.DOCKER_IMAGE = "${registry}/${dockerImageName}:\${dockerImageTag}"
+        `;
+      case 'azure':
+        return `
+          echo "Pushing Docker image to Azure ACR..."
+          withCredentials([
+            usernamePassword(
+              credentialsId: 'azure-acr-credentials',
+              usernameVariable: 'ACR_USERNAME',
+              passwordVariable: 'ACR_PASSWORD'
+            )
+          ]) {
+            sh "echo \${ACR_PASSWORD} | docker login ${registry} -u \${ACR_USERNAME} --password-stdin"
+            sh "docker tag \${DOCKER_IMAGE} ${registry}/${dockerImageName}:\${dockerImageTag}"
+            sh "docker push ${registry}/${dockerImageName}:\${dockerImageTag}"
+            env.DOCKER_IMAGE = "${registry}/${dockerImageName}:\${dockerImageTag}"
+          }
+        `;
+      case 'gcp':
+        return `
+          echo "Pushing Docker image to GCP Container Registry..."
+          sh "gcloud auth configure-docker --quiet"
+          sh "docker tag \${DOCKER_IMAGE} ${registry}/${dockerImageName}:\${dockerImageTag}"
+          sh "docker push ${registry}/${dockerImageName}:\${dockerImageTag}"
+          env.DOCKER_IMAGE = "${registry}/${dockerImageName}:\${dockerImageTag}"
+        `;
+      case 'digitalocean':
+        return `
+          echo "Pushing Docker image to DigitalOcean Registry..."
+          sh "doctl auth init --access-token \${DO_API_TOKEN}"
+          sh "doctl registry login --expiry-seconds 600"
+          sh "docker tag \${DOCKER_IMAGE} ${registry}/${dockerImageName}:\${dockerImageTag}"
+          sh "docker push ${registry}/${dockerImageName}:\${dockerImageTag}"
+          env.DOCKER_IMAGE = "${registry}/${dockerImageName}:\${dockerImageTag}"
+        `;
+      default:
+        return `
+          echo "Pushing Docker image to registry..."
+          withCredentials([
+            usernamePassword(
+              credentialsId: 'docker-registry-credentials',
+              usernameVariable: 'DOCKER_USERNAME',
+              passwordVariable: 'DOCKER_PASSWORD'
+            )
+          ]) {
+            sh "echo \${DOCKER_PASSWORD} | docker login -u \${DOCKER_USERNAME} --password-stdin"
+            sh "docker tag \${DOCKER_IMAGE} \${DOCKER_USERNAME}/${dockerImageName}:\${dockerImageTag}"
+            sh "docker push \${DOCKER_USERNAME}/${dockerImageName}:\${dockerImageTag}"
+            env.DOCKER_IMAGE = "\${DOCKER_USERNAME}/${dockerImageName}:\${dockerImageTag}"
+          }
+        `;
+    }
   }
 }

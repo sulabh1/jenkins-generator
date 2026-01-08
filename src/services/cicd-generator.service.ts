@@ -1,9 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { PromptService } from './prompt.service';
+import inquirer from 'inquirer';
 import { JenkinsFileService } from './jenkinsfile.service';
 import { SecurityService } from './security.service';
 import { ValidationService } from './validation.service';
 import { EnvironmentService } from './environment.service';
+import { IaCService } from './iac.service';
+import { DashboardService } from './dashboard.service';
+import { DockerComposeService } from './docker-compose.service';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import chalk from 'chalk';
@@ -17,6 +21,9 @@ export class CICDGeneratorService {
     private readonly securityService: SecurityService,
     private readonly validationService: ValidationService,
     private readonly environmentService: EnvironmentService,
+    private readonly iacService: IaCService,
+    private readonly dashboardService: DashboardService,
+    private readonly dockerComposeService: DockerComposeService,
   ) {}
 
   async run(): Promise<void> {
@@ -36,7 +43,52 @@ export class CICDGeneratorService {
 
       // Collect all configurations
       console.log(chalk.yellow('Please provide the following information:\n'));
-      const config = await this.promptService.collectAllConfigurations();
+
+      const configPath = path.resolve(
+        process.cwd(),
+        'jenkins-generator-config.json',
+      );
+      let config: any;
+
+      if (await fs.pathExists(configPath)) {
+        const loadConfig = await inquirer.prompt([
+          {
+            type: 'confirm',
+            name: 'usePreset',
+            message:
+              'Found existing jenkins-generator-config.json. Do you want to load it?',
+            default: true,
+          },
+        ]);
+
+        if (loadConfig.usePreset) {
+          config = await fs.readJSON(configPath);
+          console.log(chalk.green('Configuration loaded successfully!\n'));
+        }
+      }
+
+      if (!config) {
+        config = await this.promptService.collectAllConfigurations();
+
+        const saveConfig = await inquirer.prompt([
+          {
+            type: 'confirm',
+            name: 'savePreset',
+            message:
+              'Do you want to save this configuration as a preset (jenkins-generator-config.json)?',
+            default: true,
+          },
+        ]);
+
+        if (saveConfig.savePreset) {
+          await fs.writeJSON(configPath, config, { spaces: 2 });
+          console.log(
+            chalk.green(
+              'Configuration saved to jenkins-generator-config.json\n',
+            ),
+          );
+        }
+      }
 
       // Generate Jenkinsfile
       const generatingSpinner = ora('Generating Jenkinsfile...').start();
@@ -48,7 +100,7 @@ export class CICDGeneratorService {
         this.jenkinsFileService.generateCredentialsSetupGuide(config);
       const readme = this.jenkinsFileService.generateReadme(config);
 
-      // NEW: Generate .env.template if external services are configured
+      // Generate .env.template if external services are configured
       let envTemplate = '';
       if (
         config.project.externalServices &&
@@ -59,6 +111,28 @@ export class CICDGeneratorService {
         );
       }
 
+      // Generate IaC
+      const iacSpinner = ora('Generating Infrastructure as Code...').start();
+      const terraformConfig = this.iacService.generateTerraformConfig(
+        config.cloud,
+        config.project.projectName,
+      );
+      iacSpinner.succeed('Infrastructure as Code generated');
+
+      // Generate Dashboard
+      const dashboardSpinner = ora(
+        'Generating Deployment Dashboard...',
+      ).start();
+      const dashboard =
+        this.dashboardService.generateDeploymentDashboard(config);
+      dashboardSpinner.succeed('Deployment Dashboard generated');
+
+      // Generate Docker Compose
+      let dockerCompose = '';
+      if (config.project.hasDockerfile) {
+        dockerCompose = this.dockerComposeService.generateDockerCompose(config);
+      }
+
       // Write files
       const writingSpinner = ora('Writing files...').start();
       await this.writeFiles(
@@ -66,6 +140,9 @@ export class CICDGeneratorService {
         credentialsGuide,
         readme,
         envTemplate,
+        terraformConfig,
+        dashboard,
+        dockerCompose,
         config,
       );
       writingSpinner.succeed('Files written successfully');
@@ -83,17 +160,28 @@ export class CICDGeneratorService {
     credentialsGuide: string,
     readme: string,
     envTemplate: string,
+    terraformConfig: string,
+    dashboardContent: string,
+    dockerComposeContent: string,
     config: any,
   ): Promise<void> {
-    const rootDir = process.cwd();
-    const cicdDir = path.join(rootDir, '.cicd');
+    const projectDir = process.cwd();
+    const cicdDir = path.join(projectDir, '.cicd');
 
     // Ensure .cicd directory exists
     await fs.ensureDir(cicdDir);
 
     // Write Jenkinsfile to root
-    const jenkinsfilePath = path.join(rootDir, 'Jenkinsfile');
+    const jenkinsfilePath = path.join(projectDir, 'Jenkinsfile');
     await fs.writeFile(jenkinsfilePath, jenkinsfile);
+
+    // Write Docker Compose
+    if (dockerComposeContent) {
+      await fs.writeFile(
+        path.join(projectDir, 'docker-compose.yml'),
+        dockerComposeContent,
+      );
+    }
 
     // Write credentials guide
     const credentialsPath = path.join(cicdDir, 'CREDENTIALS_SETUP.md');
@@ -103,35 +191,38 @@ export class CICDGeneratorService {
     const readmePath = path.join(cicdDir, 'README.md');
     await fs.writeFile(readmePath, readme);
 
-    // NEW: Write .env.template if external services are configured
-    if (envTemplate) {
-      const envTemplatePath = path.join(rootDir, '.env.template');
-      await fs.writeFile(envTemplatePath, envTemplate);
-      console.log(
-        chalk.green('\n📄 Generated .env.template for local development'),
-      );
-    }
+    // Write .env.template
+    const envPath = path.join(projectDir, '.env.template');
+    await fs.writeFile(envPath, envTemplate);
 
-    // Write encrypted config for reference (optional)
+    // Write Terraform Config
+    const terraformDir = path.join(cicdDir, 'terraform');
+    await fs.ensureDir(terraformDir);
+    const terraformPath = path.join(terraformDir, 'main.tf');
+    await fs.writeFile(terraformPath, terraformConfig);
+
+    // Write Dashboard
+    const dashboardPath = path.join(cicdDir, 'dashboard.html');
+    await fs.writeFile(dashboardPath, dashboardContent);
+
+    // Write encrypted config
     const configPath = path.join(cicdDir, 'config.encrypted.json');
-    const encryptedConfig = this.securityService.encryptCredentials(config);
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({ encrypted: encryptedConfig }, null, 2),
-    );
+    const encrypted = this.securityService.encryptCredentials(config);
+    await fs.writeFile(configPath, encrypted);
 
-    // Create .gitignore for .cicd directory
-    const gitignorePath = path.join(cicdDir, '.gitignore');
-    await fs.writeFile(gitignorePath, 'config.encrypted.json\n*.log\n');
-
-    // Update root .gitignore to include .env
-    await this.updateRootGitignore(rootDir);
+    // Update .gitignore to ignore sensitive files
+    await this.updateRootGitignore(projectDir);
 
     console.log(chalk.green('\n📁 Generated files:'));
     console.log(chalk.gray(`  ├─ Jenkinsfile (${jenkinsfilePath})`));
+    if (dockerComposeContent) {
+      console.log(chalk.gray(`  ├─ docker-compose.yml`));
+    }
     if (envTemplate) {
       console.log(chalk.gray(`  ├─ .env.template (for local development)`));
     }
+    console.log(chalk.gray(`  ├─ .cicd/terraform/main.tf`));
+    console.log(chalk.gray(`  ├─ .cicd/dashboard.html`));
     console.log(chalk.gray(`  ├─ .cicd/CREDENTIALS_SETUP.md`));
     console.log(chalk.gray(`  ├─ .cicd/README.md`));
     console.log(chalk.gray(`  └─ .cicd/config.encrypted.json`));

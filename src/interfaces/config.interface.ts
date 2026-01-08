@@ -59,22 +59,26 @@ export interface EnvVariable {
 }
 
 export interface AWSCredentials {
-  accessKeyId: string;
-  secretAccessKey: string;
+  accessKeyId?: string;
+  secretAccessKey?: string;
   region: string;
+  useOIDC: boolean;
+  oidcRoleArn?: string;
 }
 
 export interface AzureCredentials {
   subscriptionId: string;
   clientId: string;
-  clientSecret: string;
+  clientSecret?: string;
   tenantId: string;
+  useOIDC: boolean;
 }
 
 export interface GCPCredentials {
   projectId: string;
-  keyFile: string;
+  keyFile?: string;
   region: string;
+  useOIDC: boolean;
 }
 
 export interface DOCredentials {
@@ -89,6 +93,9 @@ export interface DeploymentConfig {
   maxInstances?: number;
   healthCheckPath: string;
   port: number;
+  useLoadBalancer: boolean;
+  loadBalancerUrl?: string;
+  deploymentStrategy: 'rolling' | 'blue-green' | 'canary';
   environmentVariables: { [key: string]: string };
 }
 

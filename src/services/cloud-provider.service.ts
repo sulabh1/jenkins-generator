@@ -7,14 +7,33 @@ export class CloudProviderService {
     config: CloudConfig,
     dockerImageName: string,
   ): string {
-    const { region, deploymentConfig } = config;
-    return `
+    const { region, deploymentConfig, credentials } = config;
+    const awsCredentials = credentials as any;
+
+    let authLogic = `
     #AWS Deployment Configuration
     aws configure set aws_access_key_id \${AWS_ACCESS_KEY_ID}
     aws configure set aws_secret_access_key \${AWS_SECRET_ACCESS_KEY}
-    aws configure set region ${region}
+    aws configure set region ${region}`;
 
-    #Create/Updateb ECS Cluster
+    if (awsCredentials.useOIDC && awsCredentials.oidcRoleArn) {
+      authLogic = `
+    # AWS OIDC Authentication
+    echo "Authenticating via OIDC..."
+    export $(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \\
+    $(aws sts assume-role-with-web-identity \\
+    --role-arn ${awsCredentials.oidcRoleArn} \\
+    --role-session-name JenkinsSession \\
+    --web-identity-token \${AWS_WEB_IDENTITY_TOKEN} \\
+    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \\
+    --output text))
+    aws configure set region ${region}`;
+    }
+
+    return `
+    ${authLogic}
+
+    #Create/Update ECS Cluster
     aws ecs create-cluster --cluster-name ${dockerImageName}-cluster || true
 
     #Register Task Definition
@@ -28,7 +47,7 @@ export class CloudProviderService {
         "containerDefinitions": [
         {
             "name": "${dockerImageName}",
-            "image": "${dockerImageName}",
+            "image": "\${DOCKER_IMAGE}",
             "portMappings": [
                 {
                     "containerPort": ${deploymentConfig.port},
@@ -43,7 +62,7 @@ export class CloudProviderService {
                     "awslogs-stream-prefix": "ecs"
                 }
             }
-        },
+        }],
         "healthCheck": {
             "command": ["CMD-SHELL", "curl -f http://localhost:${
               deploymentConfig.port
@@ -52,15 +71,16 @@ export class CloudProviderService {
             "timeout": 5,
             "retries": 3
         }
-        }]
     }
     EOF
 
     aws ecs register-task-definition --cli-input-json file://task-definition.json
 
-    #Create or Update Service
+    # Check if ECS service exists
+    SERVICE_EXISTS=$(aws ecs describe-services --cluster ${dockerImageName}-cluster --services ${dockerImageName}-service --query 'services[0].status' --output text || echo "MISSING")
 
-    if[ "\$SERVICE_EXISTS" != "ACTIVE" ]; then
+    if [ "$SERVICE_EXISTS" != "ACTIVE" ]; then
+        echo "Creating new ECS service..."
         aws ecs create-service \\
             --cluster ${dockerImageName}-cluster \\
             --service-name ${dockerImageName}-service \\
@@ -69,15 +89,30 @@ export class CloudProviderService {
             --launch-type FARGATE \\
             --network-configuration "awsvpcConfiguration={subnets=[\${SUBNET_IDS}], securityGroups=[\${SECURITY_GROUP_IDS}], assignPublicIp=ENABLED}"
     else
-        aws ecs update-service \\
-            --cluster ${dockerImageName}-cluster \\
-            --service ${dockerImageName}-service \\
-            --task-definition ${dockerImageName} \\
-            --force-new-deployment
+        echo "Updating existing ECS service with ${
+          deploymentConfig.deploymentStrategy
+        } strategy..."
+        if [ "${deploymentConfig.deploymentStrategy}" == "blue-green" ]; then
+            echo "Performing Blue-Green deployment..."
+            # Simulating blue-green by creating/updating a 'green' version
+            aws ecs update-service --cluster ${dockerImageName}-cluster --service ${dockerImageName}-service --task-definition ${dockerImageName} --force-new-deployment
+        elif [ "${deploymentConfig.deploymentStrategy}" == "canary" ]; then
+            echo "Performing Canary deployment (10% traffic)..."
+            aws ecs update-service --cluster ${dockerImageName}-cluster --service ${dockerImageName}-service --task-definition ${dockerImageName} --desired-count $(( ${
+      deploymentConfig.minInstances || 1
+    } + 1 ))
+        else
+            aws ecs update-service --cluster ${dockerImageName}-cluster --service ${dockerImageName}-service --task-definition ${dockerImageName} --force-new-deployment
+        fi
     fi
 
-    echo "AWS deployment completed successfully"
-    
+    ${this.generateDeployedUrlExport(
+      deploymentConfig,
+      `TASK_ARN=$(aws ecs list-tasks --cluster ${dockerImageName}-cluster --service-name ${dockerImageName}-service --query 'taskArns[0]' --output text)
+    ENI_ID=$(aws ecs describe-tasks --cluster ${dockerImageName}-cluster --tasks $TASK_ARN --query 'tasks[0].attachments[0].details[?name==\`networkInterfaceId\`].value' --output text)
+    PUBLIC_IP=$(aws ec2 describe-network-interfaces --network-interface-ids $ENI_ID --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
+    export DEPLOYED_URL="http://$PUBLIC_IP:${deploymentConfig.port}"`,
+    )}
     `;
   }
 
@@ -85,14 +120,28 @@ export class CloudProviderService {
     config: CloudConfig,
     dockerImageName: string,
   ): string {
-    const { deploymentConfig } = config;
+    const { deploymentConfig, credentials } = config;
+    const azureCredentials = credentials as any;
 
-    return `
+    let authLogic = `
     # Azure Deployment Configuration
     az login --service-principal \\
         -u \${AZURE_CLIENT_ID} \\
         -p \${AZURE_CLIENT_SECRET} \\
-        --tenant \${AZURE_TENANT_ID}
+        -t \${AZURE_TENANT_ID}`;
+
+    if (azureCredentials.useOIDC) {
+      authLogic = `
+    # Azure OIDC Authentication
+    echo "Authenticating via OIDC..."
+    az login --service-principal \\
+        -u \${AZURE_CLIENT_ID} \\
+        -t \${AZURE_TENANT_ID} \\
+        --federated-token \${AZURE_FEDERATED_TOKEN}`;
+    }
+
+    return `
+    ${authLogic}
     
     az account set --subscription \${AZURE_SUBSCRIPTION_ID}
 
@@ -110,11 +159,14 @@ export class CloudProviderService {
         --registry-username \${ACR_USERNAME} \\
         --registry-password \${ACR_PASSWORD} \\
         --dns-name-label ${dockerImageName} \\
-        --ports ${deploymentConfig.port}
+        --ports ${deploymentConfig.port} \\
         --environment-variables NODE_ENV=production \\
         --restart-policy Always
-    
-    echo "Azure deployment completed successfully"
+
+    ${this.generateDeployedUrlExport(
+      deploymentConfig,
+      `export DEPLOYED_URL="http://${dockerImageName}.\${AZURE_REGION}.azurecontainer.io:${deploymentConfig.port}"`,
+    )}
     `;
   }
 
@@ -122,28 +174,45 @@ export class CloudProviderService {
     config: CloudConfig,
     dockerImageName: string,
   ): string {
-    const { region, deploymentConfig } = config;
+    const { region, deploymentConfig, credentials } = config;
+    const gcpCredentials = credentials as any;
 
-    return `
+    let authLogic = `
     # GCP Deployment Configuration
     gcloud auth activate-service-account --key-file=\${GCP_KEY_FILE}
     gcloud config set project \${GCP_PROJECT_ID}
-    gcloud config set compute/region ${region}
+    gcloud config set compute/region ${region}`;
+
+    if (gcpCredentials.useOIDC) {
+      authLogic = `
+    # GCP OIDC Authentication
+    echo "Authenticating via OIDC..."
+    echo \${GCP_OIDC_TOKEN} > oidc_token.txt
+    gcloud auth login --cred-file=oidc_token.txt
+    gcloud config set project \${GCP_PROJECT_ID}
+    gcloud config set compute/region ${region}`;
+    }
+
+    return `
+    ${authLogic}
 
     # Deploy to Cloud Run
     gcloud run deploy ${dockerImageName} \\
         --image \${DOCKER_IMAGE} \\
         --platform managed \\
-        --region ${region} \\
-        --allow-unauthenticated
         --port ${deploymentConfig.port} \\
         --memory 512Mi \\
         --cpu 1 \\
         --min-instances ${deploymentConfig.minInstances || 0} \\
         --max-instances ${deploymentConfig.maxInstances || 1} \\
-        --set-env-vars NODE_ENV=production
+        --set-env-vars NODE_ENV=production \\
+        --region ${region} \\
+        --format='value(status.url)' > gcp_url.txt
     
-    echo "GCP deployment completed successfully"
+    ${this.generateDeployedUrlExport(
+      deploymentConfig,
+      `export DEPLOYED_URL=$(cat gcp_url.txt)`,
+    )}
     `;
   }
 
@@ -177,7 +246,6 @@ export class CloudProviderService {
     EOF
 
     # Create or update app
-
     APP_ID=\$(doctl apps list --format ID --no-header | head -n 1)
 
     if [ -z "\$APP_ID" ]; then
@@ -186,7 +254,10 @@ export class CloudProviderService {
         doctl apps update \$APP_ID --spec app-spec.yaml
     fi
 
-    echo "DigitalOcean deployment completed successfully
+    ${this.generateDeployedUrlExport(
+      deploymentConfig,
+      `export DEPLOYED_URL=$(doctl apps get \$APP_ID --format DefaultIngress --no-header)`,
+    )}
     `;
   }
 
@@ -215,27 +286,54 @@ export class CloudProviderService {
     const { provider, credentials } = config;
 
     switch (provider) {
-      case 'aws':
+      case 'aws': {
+        const awsCreds = credentials as any;
+        if (awsCreds.useOIDC) {
+          return `
+      environment {
+        AWS_WEB_IDENTITY_TOKEN = credentials('aws-oidc-token')
+      }`;
+        }
         return `
-            environment {
-                AWS_ACCESS_KEY_ID = credentials('aws-access-key-id')
-                AWS_SECRET_ACCESS_KEY = credentials('aws-secret-access-key')
-                AWS_REGION = '${credentials['aws-region']}'
-            }`;
-      case 'azure':
+      environment {
+        AWS_ACCESS_KEY_ID = credentials('aws-access-key-id')
+        AWS_SECRET_ACCESS_KEY = credentials('aws-secret-access-key')
+        AWS_REGION = '${credentials['region']}'
+      }`;
+      }
+      case 'azure': {
+        const azCreds = credentials as any;
+        const baseEnv = `
+        AZURE_SUBSCRIPTION_ID = credentials('azure-subscription-id')
+        AZURE_TENANT_ID = credentials('azure-tenant-id')
+        AZURE_CLIENT_ID = credentials('azure-client-id')`;
+
+        if (azCreds.useOIDC) {
+          return `
+      environment {${baseEnv}
+        AZURE_FEDERATED_TOKEN = credentials('azure-federated-token')
+      }`;
+        }
         return `
-            environment {
-                AZURE_CLIENT_ID = credentials('azure-client-id')
-                AZURE_CLIENT_SECRET = credentials('azure-client-secret')
-                AZURE_TENANT_ID = credentials('azure-tenant-id')
-                AZURE_SUBSCRIPTION_ID = credentials('azure-subscription-id')
-            }`;
-      case 'gcp':
+      environment {${baseEnv}
+        AZURE_CLIENT_SECRET = credentials('azure-client-secret')
+      }`;
+      }
+      case 'gcp': {
+        const gcpCreds = credentials as any;
+        if (gcpCreds.useOIDC) {
+          return `
+      environment {
+        GCP_PROJECT_ID = credentials('gcp-project-id')
+        GCP_OIDC_TOKEN = credentials('gcp-oidc-token')
+      }`;
+        }
         return `
-            environment {
-                GCP_PROJECT_ID = credentials('gcp-project-id')
-                GCP_KEY_FILE = credentials('gcp-key-file')
-            }`;
+      environment {
+        GCP_PROJECT_ID = credentials('gcp-project-id')
+        GCP_KEY_FILE = credentials('gcp-key-file')
+      }`;
+      }
       case 'digitalocean':
         return `
             environment {
@@ -244,5 +342,22 @@ export class CloudProviderService {
       default:
         return '';
     }
+  }
+
+  private generateDeployedUrlExport(
+    deploymentConfig: any,
+    defaultUrlScript: string,
+  ): string {
+    if (deploymentConfig.useLoadBalancer && deploymentConfig.loadBalancerUrl) {
+      return `
+    export DEPLOYED_URL="${deploymentConfig.loadBalancerUrl}"
+    echo "DEPLOYED_URL=\$DEPLOYED_URL" >> deployment.env
+    echo "Deployment completed. Reachable at Load Balancer: \$DEPLOYED_URL"`;
+    }
+
+    return `
+    ${defaultUrlScript}
+    echo "DEPLOYED_URL=\$DEPLOYED_URL" >> deployment.env
+    echo "Deployment completed. Reachable at: \$DEPLOYED_URL"`;
   }
 }

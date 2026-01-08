@@ -41,7 +41,7 @@ export class ValidationService {
 
   validateGitRepository(repoUrl: string): boolean {
     const gitUrlPattern =
-      /^(https?:\/\/)?([\w\.-]+@)?([\w\.-]+)(:\d+)?(\/[\w\.-]+)*\.git$/;
+      /^(https?:\/\/|git@)?([\w\.-]+)([:\/])([\w\.-]+)\/([\w\.-]+)(\.git)?$/;
     const githubPattern = /^https?:\/\/github\.com\/[\w-]+\/[\w-]+(\.git)?$/;
     const gitlabPattern = /^https?:\/\/gitlab\.com\/[\w-]+\/[\w-]+(\.git)?$/;
     const bitbucketPattern =

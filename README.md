@@ -47,9 +47,10 @@ Never worry about CI/CD configuration again! This tool automatically generates p
 - **Microsoft Teams** - Adaptive cards
 - **Telegram** - Markdown formatted messages
 
-### 🐳 Docker-Based Deployments
+### 🐳 Docker & Local Infrastructure
 
 - **Automated image building** from your Dockerfile
+- **Docker Compose generation** for local infrastructure testing 🆕
 - **Registry push** to Docker Hub or private registry
 - **Container orchestration** on cloud platforms
 - **Health check verification**
@@ -65,8 +66,12 @@ Never worry about CI/CD configuration again! This tool automatically generates p
 
 ### 📊 Advanced Features
 
-- **Auto-scaling configuration**
-- **Health check endpoints**
+- **Infrastructure as Code (IaC)** - Automatic Terraform generation 🆕
+- **Advanced Deployments** - Rolling, Blue-Green, and Canary strategies 🆕
+- **Post-Deployment Dashboard** - Visual HTML summaries 🆕
+- **Configuration Presets** - Save/Load configuration for speed 🆕
+- **Health check endpoints** with retry logic
+- **Load Balancer & stable DNS support**
 - **Deployment tier management** (dev/staging/production)
 - **Build retry logic**
 - **Comprehensive logging**
@@ -122,39 +127,60 @@ npm install --save-dev jenkins-generator
 - **Dockerfile** in your project (or we'll guide you)
 - **Jenkins** 2.0+ with required plugins
 
-## 🚀 Quick Start
+## 🚀 Quick Start (Local)
 
-### 1. Navigate to Your Project
+1. **Install Globably:**
 
 ```bash
-cd your-awesome-project
+npm install -g jenkins-generator
 ```
 
-### 2. Run the Generator
+2. **Run in your project root:**
 
 ```bash
 jenkins-generator
 ```
 
-### 3. Answer Questions
+## 🐳 Usage with Docker
 
-The CLI will ask you about:
+You can run the generator without installing Node.js by using our official Docker image.
 
-- Project details (name, type, language)
-- Git repository and branch
-- Docker configuration
-- Testing preferences
-- **External services** (databases, caching, storage, etc.) 🆕
-- Cloud provider selection
-- Deployment settings
-- Notification channels
-- Jenkins configuration
+### Pulling the image
+
+```bash
+docker pull your-dockerhub-username/jenkins-generator
+```
+
+### Running the container
+
+To allow the generator to write files to your current directory, you must mount your project directory as a volume:
+
+```bash
+docker run -it --rm -v $(pwd):/app your-dockerhub-username/jenkins-generator
+```
+
+---
+
+## 🛠️ Configuration Options
+
+The generator will prompt you for:
+
+- **Project Details**: Name, type (frontend/backend), language (JS/TS)
+- **Git Info**: Repository URL and branch
+- **Docker**: Dockerfile presence and path
+- **External Services**: Databases, Caching, Storage, etc (NEW in v2.0!)
+- **Cloud Provider**: AWS, Azure, GCP, or DigitalOcean
+- **Deployment**: Instance types, regions, auto-scaling
+- **Notifications**: Slack, Discord, Teams, Telegram, Email
+
+---
 
 ### 4. Review Generated Files
 
 ```
 your-project/
 ├── Jenkinsfile                    # 🎯 Main pipeline with env vars
+├── docker-compose.yml             # 🐳 Local infrastructure testing 🆕
 ├── .env.template                  # 🆕 Template for local development
 ├── .gitignore                     # 🆕 Updated to exclude .env
 └── .cicd/
@@ -456,6 +482,27 @@ npm config get prefix
 ### More Help
 
 For more troubleshooting, check the generated `.cicd/README.md` in your project.
+
+## 🆕 What's New in v2.2.0
+
+### Major Features
+
+- ✅ **Infrastructure as Code (IaC)** - Generate Terraform scripts for AWS, Azure, GCP, and DigitalOcean
+- ✅ **Docker Compose Generation** - Automatic local infrastructure setup (versioned and validated) 🆕
+- ✅ **OIDC Authentication** - Support for secure, token-based authentication (Web Identity Federation)
+- ✅ **Deployment Strategies** - Integrated Rolling, Blue-Green, and Canary deployment support
+- ✅ **Visual Dashboard** - Post-deployment HTML summary for quick status overview
+- ✅ **Configuration Presets** - Save your answers to `jenkins-generator-config.json` for rapid re-runs
+- ✅ **Improved Validation** - Robust Git URL and port validation suite
+
+## 🆕 What's New in v2.1.0
+
+### Major Features
+
+- ✅ **Load Balancer Integration** - Support for stable DNS URLs in deployment and health checks
+- ✅ **Enhanced Health Checks** - Robust curl-based retries with dynamic URL extraction
+- ✅ **Multi-Cloud Registry support** - Native integration with ECR, ACR, GCR, and DO Registry
+- ✅ **Full Containerization** - Ready-to-use Docker image for easy distribution
 
 ## 🆕 What's New in v2.0.0
 

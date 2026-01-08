@@ -7,6 +7,9 @@ import { SecurityService } from './services/security.service';
 import { ValidationService } from './services/validation.service';
 import { NotificationService } from './services/notification.service';
 import { EnvironmentService } from './services/environment.service';
+import { IaCService } from './services/iac.service';
+import { DashboardService } from './services/dashboard.service';
+import { DockerComposeService } from './services/docker-compose.service';
 
 @Module({
   imports: [],
@@ -19,6 +22,9 @@ import { EnvironmentService } from './services/environment.service';
     ValidationService,
     NotificationService,
     EnvironmentService,
+    IaCService,
+    DashboardService,
+    DockerComposeService,
   ],
 })
 export class AppModule {}
